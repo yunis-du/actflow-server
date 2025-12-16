@@ -1,0 +1,26 @@
+[package]
+name = "actflow-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+actflow = "0.1.4"
+anyhow = "1.0.100"
+chrono = "0.4.42"
+clap = { version = "4.5.53", features = ["derive"] }
+flexi_logger = "0.31"
+log = "0.4.29"
+prost = "0.14.1"
+prost-types = "0.14.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+serde_yaml = "0.9.34"
+thiserror = "2.0.17"
+tokio = { version = "1.48", features = ["full"] }
+tokio-stream = "0.1.17"
+tonic = "0.14.2"
+tonic-prost = "0.14.2"
+
+[build-dependencies]
+built = { version = "0.8.0", features = ["chrono", "git2"] }
+tonic-prost-build = "0.14.2"

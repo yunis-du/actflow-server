@@ -1,0 +1,116 @@
+
+syntax = "proto3";
+
+package workflow;
+
+import "google/protobuf/struct.proto";
+
+service WorkflowService {
+  // Run a workflow
+  rpc RunWorkflow(RunWorkflowRequest) returns (stream WorkflowEvent) {}
+  // Stop a running workflow
+  rpc StopWorkflow(StopWorkflowRequest) returns (StopWorkflowResponse) {}
+}
+
+
+message StopWorkflowRequest {
+  string process_id = 1;
+}
+
+message StopWorkflowResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message RunWorkflowRequest {
+  google.protobuf.Struct workflow_model = 1;
+}
+
+message WorkflowEvent {
+  oneof event {
+    WorkflowStart workflow_start = 1;
+    WorkflowSuccess workflow_success = 2;
+    WorkflowFailure workflow_failure = 3;
+    WorkflowAbort workflow_abort = 4;
+    WorkflowPause workflow_pause = 5;
+
+    NodeRunning node_running = 6;
+    NodeStopped node_stopped = 7;
+    NodePaused node_paused = 8;
+    NodeSkipped node_skipped = 9;
+    NodeSuccess node_success = 10;
+    NodeError node_error = 11;
+    NodeRetry node_retry = 12;
+
+    NodeLog node_log = 13;
+  }
+}
+
+
+// Events
+message WorkflowStart {
+  string process_id = 1;
+}
+
+message WorkflowSuccess {
+  string process_id = 1;
+}
+
+message WorkflowFailure {
+  string process_id = 1;
+  string error_message = 2;
+}
+
+message WorkflowAbort {
+  string process_id = 1;
+  string reason = 2;
+}
+
+message WorkflowPause {
+  string process_id = 1;
+  string reason = 2;
+}
+
+message NodeRunning {
+  string process_id = 1;
+  string node_id = 2;
+}
+
+message NodeStopped {
+  string process_id = 1;
+  string node_id = 2;
+}
+
+message NodePaused {
+  string process_id = 1;
+  string node_id = 2;
+  string reason = 3;
+}
+
+message NodeSkipped {
+  string process_id = 1;
+  string node_id = 2;
+}
+
+message NodeSuccess {
+  string process_id = 1;
+  string node_id = 2;
+}
+
+message NodeError {
+  string process_id = 1;
+  string node_id = 2;
+  string error_message = 3;
+}
+
+message NodeRetry {
+  string process_id = 1;
+  string node_id = 2;
+}
+
+message NodeLog {
+  string process_id = 1;
+  string node_id = 2;
+  string log_message = 3;
+  int64 timestamp = 4;
+}

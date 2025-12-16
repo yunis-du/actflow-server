@@ -1,0 +1,11 @@
+server:
+  port: 20508
+log:
+  level: INFO
+  third-party-log_level: WARN
+  log-file: /var/log/actflow-server/actflow-server.log
+  # log file retention days
+  retention: 365
+# Number of async worker threads, range [1, 32768), defaults to 16
+async-worker-thread-number: 16
+  
