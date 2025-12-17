@@ -4,9 +4,9 @@ version = 4
 
 [[package]]
 name = "actflow"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dee1c543e828720c35ef5334dacda397e3f57fd7b396d12b7c15341aad0785f9"
+checksum = "d234af33b293db0243316bd07e65390e912f627e68395541f2f6153c6ee429c1"
 dependencies = [
  "async-trait",
  "base64",
@@ -51,7 +51,6 @@ dependencies = [
  "flexi_logger",
  "log",
  "prost",
- "prost-types",
  "serde",
  "serde_json",
  "serde_yaml",

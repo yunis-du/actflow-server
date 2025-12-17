@@ -21,12 +21,13 @@ pub async fn run(
     info!("==================== Launching Actflow-Server ====================");
 
     // Build actflow engine
-    let engine = EngineBuilder::new().runtime(runtime.clone()).build()?;
+    let engine = Arc::new(EngineBuilder::new().runtime(runtime.clone()).build()?);
     engine.launch();
 
     let shutdown = Shutdown::new();
 
-    let server_task = async { server::start_server(engine, format!("0.0.0.0:{}", config.server.port), shutdown.wait()).await };
+    let server_task =
+        async { server::start_server(engine.clone(), format!("0.0.0.0:{}", config.server.port), shutdown.wait()).await };
 
     let sigint = ctrl_c();
 
@@ -36,7 +37,11 @@ pub async fn run(
         else => return Ok(()),
     }
     shutdown.shutdown();
-    info!("Gracefully shutting down.");
+    info!("Gracefully shutting down...");
+
+    // shutdown actflow engine
+    engine.shutdown();
+    info!("Actflow engine shutdown");
 
     Ok(())
 }

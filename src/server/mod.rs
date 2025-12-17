@@ -1,6 +1,6 @@
 mod server;
 
-use std::net::ToSocketAddrs;
+use std::{net::ToSocketAddrs, sync::Arc};
 
 use actflow::Engine;
 use anyhow::{Result, anyhow};
@@ -11,7 +11,7 @@ use crate::proto::workflow_service_server::WorkflowServiceServer;
 use server::WorkflowServer;
 
 pub async fn start_server(
-    engine: Engine,
+    engine: Arc<Engine>,
     addr: impl ToSocketAddrs,
     signal: impl Future<Output = ()>,
 ) -> Result<()> {

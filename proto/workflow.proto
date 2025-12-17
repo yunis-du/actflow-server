@@ -1,10 +1,8 @@
-
 syntax = "proto3";
 
 package workflow;
 
-import "google/protobuf/struct.proto";
-
+// WorkflowService defines the gRPC service for managing workflows
 service WorkflowService {
   // Run a workflow
   rpc RunWorkflow(RunWorkflowRequest) returns (stream WorkflowEvent) {}
@@ -13,19 +11,23 @@ service WorkflowService {
 }
 
 
+// Request to stop a workflow
 message StopWorkflowRequest {
-  string process_id = 1;
+  string pid = 1;// Process ID of the workflow to stop
 }
 
+// Response after attempting to stop a workflow
 message StopWorkflowResponse {
-  bool success = 1;
-  string error_message = 2;
+  bool success = 1;// Indicates if the stop operation was successful
+  string err_msg = 2;// Error message if the operation failed
 }
 
+// Request to run a workflow
 message RunWorkflowRequest {
-  google.protobuf.Struct workflow_model = 1;
+  string workflow_model = 1;// JSON representation of the workflow
 }
 
+// Workflow events that can occur during the lifecycle of a workflow
 message WorkflowEvent {
   oneof event {
     WorkflowStart workflow_start = 1;
@@ -49,68 +51,68 @@ message WorkflowEvent {
 
 // Events
 message WorkflowStart {
-  string process_id = 1;
+  string pid = 1;
 }
 
 message WorkflowSuccess {
-  string process_id = 1;
+  string pid = 1;
 }
 
 message WorkflowFailure {
-  string process_id = 1;
-  string error_message = 2;
+  string pid = 1;
+  string err_msg = 2;
 }
 
 message WorkflowAbort {
-  string process_id = 1;
+  string pid = 1;
   string reason = 2;
 }
 
 message WorkflowPause {
-  string process_id = 1;
+  string pid = 1;
   string reason = 2;
 }
 
 message NodeRunning {
-  string process_id = 1;
-  string node_id = 2;
+  string pid = 1;
+  string nid = 2;
 }
 
 message NodeStopped {
-  string process_id = 1;
-  string node_id = 2;
+  string pid = 1;
+  string nid = 2;
 }
 
 message NodePaused {
-  string process_id = 1;
-  string node_id = 2;
+  string pid = 1;
+  string nid = 2;
   string reason = 3;
 }
 
 message NodeSkipped {
-  string process_id = 1;
-  string node_id = 2;
+  string pid = 1;
+  string nid = 2;
 }
 
 message NodeSuccess {
-  string process_id = 1;
-  string node_id = 2;
+  string pid = 1;
+  string nid = 2;
 }
 
 message NodeError {
-  string process_id = 1;
-  string node_id = 2;
-  string error_message = 3;
+  string pid = 1;
+  string nid = 2;
+  string err_msg = 3;
 }
 
 message NodeRetry {
-  string process_id = 1;
-  string node_id = 2;
+  string pid = 1;
+  string nid = 2;
 }
 
 message NodeLog {
-  string process_id = 1;
-  string node_id = 2;
-  string log_message = 3;
+  string pid = 1;
+  string nid = 2;
+  string content = 3;
   int64 timestamp = 4;
 }

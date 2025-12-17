@@ -1,19 +1,23 @@
+use std::sync::{Arc, Mutex};
+
 use actflow::{ChannelEvent, ChannelOptions, Engine};
 use anyhow::Result;
+use log::{error, info};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
 use crate::proto::{
-    RunWorkflowRequest, StopWorkflowRequest, StopWorkflowResponse, WorkflowEvent, workflow_service_server::WorkflowService,
+    RunWorkflowRequest, StopWorkflowRequest, StopWorkflowResponse, WorkflowEvent, workflow_event::Event as ProtoEvent,
+    workflow_service_server::WorkflowService,
 };
 
 pub struct WorkflowServer {
-    engine: Engine,
+    engine: Arc<Engine>,
 }
 
 impl WorkflowServer {
-    pub fn new(engine: Engine) -> Self {
+    pub fn new(engine: Arc<Engine>) -> Self {
         Self {
             engine,
         }
@@ -31,10 +35,12 @@ impl WorkflowService for WorkflowServer {
         request: tonic::Request<RunWorkflowRequest>,
     ) -> RR<Self::RunWorkflowStream> {
         let request = request.into_inner();
-        let workflow_model = request.workflow_model.ok_or_else(|| Status::invalid_argument("Missing workflow model"))?;
 
-        let workflow_model: actflow::WorkflowModel = serde_json::from_value(struct_to_json_value(workflow_model))
+        let workflow_model: actflow::WorkflowModel = serde_json::from_str(&request.workflow_model)
             .map_err(|e| Status::invalid_argument(format!("Invalid workflow model: {}", e)))?;
+        let wid = workflow_model.id.clone();
+
+        info!("running workflow: {}", wid);
 
         let porc = self
             .engine
@@ -43,23 +49,16 @@ impl WorkflowService for WorkflowServer {
         let pid = porc.id();
 
         let (tx, rx) = mpsc::channel(100);
+        let tx = Arc::new(Mutex::new(Some(tx)));
 
         let tx_event = tx.clone();
-        ChannelEvent::channel(self.engine.channel(), ChannelOptions::with_pid(pid.to_owned())).on_event_async(move |event| {
-            let tx = tx_event.clone();
-            let event = event.clone();
-            Box::pin(async move {
-                handle_workflow_events(&tx, &event).await;
-            })
+        ChannelEvent::channel(self.engine.channel(), ChannelOptions::with_pid(pid.to_owned())).on_event(move |event| {
+            handle_workflow_events(&tx_event, &wid, &event);
         });
 
-        let tx_log = tx;
-        ChannelEvent::channel(self.engine.channel(), ChannelOptions::with_pid(pid.to_owned())).on_log_async(move |log| {
-            let tx = tx_log.clone();
-            let log = log.clone();
-            Box::pin(async move {
-                handle_workflow_logs(&tx, &log).await;
-            })
+        let tx_log = tx.clone();
+        ChannelEvent::channel(self.engine.channel(), ChannelOptions::with_pid(pid.to_owned())).on_log(move |log| {
+            handle_workflow_logs(&tx_log, log);
         });
 
         porc.start();
@@ -71,149 +70,143 @@ impl WorkflowService for WorkflowServer {
         &self,
         request: tonic::Request<StopWorkflowRequest>,
     ) -> RR<StopWorkflowResponse> {
-        let pid = request.into_inner().process_id;
+        let pid = request.into_inner().pid;
         match self.engine.stop(&pid) {
             Ok(()) => Ok(Response::new(StopWorkflowResponse {
                 success: true,
-                error_message: "".to_string(),
+                err_msg: "".to_string(),
             })),
             Err(err) => Ok(Response::new(StopWorkflowResponse {
                 success: false,
-                error_message: err.to_string(),
+                err_msg: err.to_string(),
             })),
         }
     }
 }
 
-type WorkflowEventTx = mpsc::Sender<Result<WorkflowEvent, Status>>;
+type WorkflowEventTx = Arc<Mutex<Option<mpsc::Sender<Result<WorkflowEvent, Status>>>>>;
 
-async fn handle_workflow_events(
+fn handle_workflow_events(
     tx: &WorkflowEventTx,
+    workflow_id: &str,
     event: &actflow::Event<actflow::Message>,
 ) {
+    // Check if the event is terminal
+    let is_terminal = matches!(
+        &event.event,
+        actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Succeeded)
+            | actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Failed(_))
+            | actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Aborted(_))
+    );
+
     let workflow_event = match &event.event {
         // Workflow events
         actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Start(_)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::WorkflowStart(
-                crate::proto::WorkflowStart {
-                    process_id: event.pid.clone(),
-                },
-            )),
+            event: Some(ProtoEvent::WorkflowStart(crate::proto::WorkflowStart {
+                pid: event.pid.clone(),
+            })),
         },
         actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Succeeded) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::WorkflowSuccess(
-                crate::proto::WorkflowSuccess {
-                    process_id: event.pid.clone(),
-                },
-            )),
+            event: Some(ProtoEvent::WorkflowSuccess(crate::proto::WorkflowSuccess {
+                pid: event.pid.clone(),
+            })),
         },
         actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Failed(err)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::WorkflowFailure(
-                crate::proto::WorkflowFailure {
-                    process_id: event.pid.clone(),
-                    error_message: err.error.clone(),
-                },
-            )),
+            event: Some(ProtoEvent::WorkflowFailure(crate::proto::WorkflowFailure {
+                pid: event.pid.clone(),
+                err_msg: err.error.clone(),
+            })),
         },
         actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Aborted(aborted)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::WorkflowAbort(
-                crate::proto::WorkflowAbort {
-                    process_id: event.pid.clone(),
-                    reason: aborted.reason.clone(),
-                },
-            )),
+            event: Some(ProtoEvent::WorkflowAbort(crate::proto::WorkflowAbort {
+                pid: event.pid.clone(),
+                reason: aborted.reason.clone(),
+            })),
         },
         actflow::GraphEvent::Workflow(actflow::WorkflowEvent::Paused(paused)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::WorkflowPause(
-                crate::proto::WorkflowPause {
-                    process_id: event.pid.clone(),
-                    reason: paused.reason.clone(),
-                },
-            )),
+            event: Some(ProtoEvent::WorkflowPause(crate::proto::WorkflowPause {
+                pid: event.pid.clone(),
+                reason: paused.reason.clone(),
+            })),
         },
         // Node events
         actflow::GraphEvent::Node(actflow::NodeEvent::Running(_)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodeRunning(crate::proto::NodeRunning {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
+            event: Some(ProtoEvent::NodeRunning(crate::proto::NodeRunning {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
             })),
         },
         actflow::GraphEvent::Node(actflow::NodeEvent::Stopped(_)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodeStopped(crate::proto::NodeStopped {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
+            event: Some(ProtoEvent::NodeStopped(crate::proto::NodeStopped {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
             })),
         },
         actflow::GraphEvent::Node(actflow::NodeEvent::Paused(_)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodePaused(crate::proto::NodePaused {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
-                reason: String::new(),
+            event: Some(ProtoEvent::NodePaused(crate::proto::NodePaused {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
+                reason: "Paused by user".to_string(),
             })),
         },
         actflow::GraphEvent::Node(actflow::NodeEvent::Skipped) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodeSkipped(crate::proto::NodeSkipped {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
+            event: Some(ProtoEvent::NodeSkipped(crate::proto::NodeSkipped {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
             })),
         },
         actflow::GraphEvent::Node(actflow::NodeEvent::Succeeded(_)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodeSuccess(crate::proto::NodeSuccess {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
+            event: Some(ProtoEvent::NodeSuccess(crate::proto::NodeSuccess {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
             })),
         },
         actflow::GraphEvent::Node(actflow::NodeEvent::Error(err)) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodeError(crate::proto::NodeError {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
-                error_message: err.to_string(),
+            event: Some(ProtoEvent::NodeError(crate::proto::NodeError {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
+                err_msg: err.to_string(),
             })),
         },
         actflow::GraphEvent::Node(actflow::NodeEvent::Retry) => WorkflowEvent {
-            event: Some(crate::proto::workflow_event::Event::NodeRetry(crate::proto::NodeRetry {
-                process_id: event.pid.clone(),
-                node_id: event.nid.clone(),
+            event: Some(ProtoEvent::NodeRetry(crate::proto::NodeRetry {
+                pid: event.pid.clone(),
+                nid: event.nid.clone(),
             })),
         },
     };
 
-    if let Err(e) = tx.send(Ok(workflow_event)).await {
-        eprintln!("Failed to send workflow event: {}", e);
+    if is_terminal {
+        if let Some(sender) = tx.lock().unwrap().take() {
+            if let Err(e) = sender.try_send(Ok(workflow_event)) {
+                error!("failed to send workflow event: {}", e);
+            }
+            info!("workflow [{}] execution completed", workflow_id);
+        }
+    } else {
+        if let Some(sender) = tx.lock().unwrap().as_ref() {
+            if let Err(e) = sender.try_send(Ok(workflow_event)) {
+                error!("failed to send workflow event: {}", e);
+            }
+        }
     }
 }
 
-async fn handle_workflow_logs(
+fn handle_workflow_logs(
     tx: &WorkflowEventTx,
     log: &actflow::Log,
 ) {
     let log_event = WorkflowEvent {
-        event: Some(crate::proto::workflow_event::Event::NodeLog(crate::proto::NodeLog {
-            process_id: log.pid.clone(),
-            node_id: log.nid.clone(),
-            log_message: log.content.clone(),
+        event: Some(ProtoEvent::NodeLog(crate::proto::NodeLog {
+            pid: log.pid.clone(),
+            nid: log.nid.clone(),
+            content: log.content.clone(),
             timestamp: log.timestamp,
         })),
     };
-    if let Err(e) = tx.send(Ok(log_event)).await {
-        eprintln!("Failed to send workflow log event: {}", e);
-    }
-}
-
-/// Convert prost_types::Struct to serde_json::Value
-fn struct_to_json_value(s: prost_types::Struct) -> serde_json::Value {
-    serde_json::Value::Object(s.fields.into_iter().map(|(k, v)| (k, prost_value_to_json_value(v))).collect())
-}
-
-fn prost_value_to_json_value(v: prost_types::Value) -> serde_json::Value {
-    use prost_types::value::Kind;
-    match v.kind {
-        Some(Kind::NullValue(_)) => serde_json::Value::Null,
-        Some(Kind::NumberValue(n)) => serde_json::json!(n),
-        Some(Kind::StringValue(s)) => serde_json::Value::String(s),
-        Some(Kind::BoolValue(b)) => serde_json::Value::Bool(b),
-        Some(Kind::StructValue(s)) => struct_to_json_value(s),
-        Some(Kind::ListValue(l)) => serde_json::Value::Array(l.values.into_iter().map(prost_value_to_json_value).collect()),
-        None => serde_json::Value::Null,
+    if let Some(sender) = tx.lock().unwrap().as_ref() {
+        if let Err(e) = sender.try_send(Ok(log_event)) {
+            error!("failed to send workflow log event: {}", e);
+        }
     }
 }
